@@ -29,10 +29,9 @@ struct TimeUniform {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
-    position: [f32; 3],
-    color: [f32; 3],
+    position: [f32; 4],
+    color: [f32; 4],
 }
-
 impl Vertex {
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -42,12 +41,12 @@ impl Vertex {
                 wgpu::VertexAttribute {
                     offset: 0,
                     shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x3,
+                    format: wgpu::VertexFormat::Float32x4,
                 },
                 wgpu::VertexAttribute {
                     offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x3,
+                    format: wgpu::VertexFormat::Float32x4,
                 },
             ],
         }
@@ -56,16 +55,16 @@ impl Vertex {
 
 const VERTICES: &[Vertex] = &[
     Vertex {
-        position: [0.0, 0.5, 0.0],
-        color: [1.0, 0.0, 0.0],
+        position: [0.0, 0.0, 0.0, 1.0],
+        color: [1.0, 0.0, 0.0, 1.0],
     },
     Vertex {
-        position: [-0.5, -0.5, 0.0],
-        color: [0.0, 1.0, 0.0],
+        position: [-0.5, -0.5, 0.0, 1.0],
+        color: [0.0, 1.0, 0.0, 1.0],
     },
     Vertex {
-        position: [0.5, -0.5, 0.0],
-        color: [0.0, 0.0, 1.0],
+        position: [0.5, -0.5, 0.0, 1.0],
+        color: [0.0, 0.0, 1.0, 1.0],
     },
 ];
 
@@ -119,7 +118,10 @@ pub struct State {
     config: wgpu::SurfaceConfiguration,
     is_surface_configured: bool,
     render_pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
+    compute_pipeline: wgpu::ComputePipeline,
+    compute_bind_group: wgpu::BindGroup,
+    compute_input_buffer: wgpu::Buffer,
+    compute_output_buffer: wgpu::Buffer,
     num_vertices: u32,
     camera: Camera,
     camera_uniform: CameraUniform,
@@ -212,12 +214,25 @@ impl State {
             desired_maximum_frame_latency: 2,
             view_formats: vec![],
         };
+        let num_output_vertices = VERTICES.len() as u32;
 
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let compute_input_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
             contents: bytemuck::cast_slice(VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
+
+        let compute_output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Vertex Buffer"),
+            size: (num_output_vertices as usize * std::mem::size_of::<Vertex>())
+                as wgpu::BufferAddress,
+            // Must be STORAGE (for compute output) and VERTEX (for render input)
+            usage: wgpu::BufferUsages::VERTEX
+                | wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         let num_vertices = VERTICES.len() as u32;
 
         let start_time = std::time::Instant::now();
@@ -233,7 +248,9 @@ impl State {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::COMPUTE
+                        | wgpu::ShaderStages::FRAGMENT
+                        | wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -256,7 +273,7 @@ impl State {
         let camera = Camera {
             // position the camera 1 unit up and 2 units back
             // +z is out of the screen
-            eye: (0.0, 1.0, 20.0).into(),
+            eye: (0.0, 1.0, 2.0).into(),
             // have it look at the origin
             target: (0.0, 0.0, 0.0).into(),
             // which way is "up"
@@ -280,7 +297,9 @@ impl State {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX
+                        | wgpu::ShaderStages::FRAGMENT
+                        | wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -301,12 +320,81 @@ impl State {
         });
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+
+        let compute_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Compute Bind Group Layout"),
+                entries: &[
+                    // @binding(0) compute_input_vertices
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // @binding(1) compute_output_vertices
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+        let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Compute Bind Group"),
+            layout: &compute_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: compute_input_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: compute_output_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let compute_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                // ‼️ RENAME this label
+                label: Some("Compute Pipeline Layout"),
+                bind_group_layouts: &[
+                    &time_bind_group_layout,    // @group(0)
+                    &camera_bind_group_layout,  // @group(1)
+                    &compute_bind_group_layout, // @group(2)
+                ],
+                push_constant_ranges: &[],
+            });
+
+        // ‼️ ADD a new layout just for the render pipeline
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&camera_bind_group_layout, &time_bind_group_layout],
+                bind_group_layouts: &[
+                    &time_bind_group_layout,   // @group(0)
+                    &camera_bind_group_layout, // @group(1)
+                ],
                 push_constant_ranges: &[],
             });
+        let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Compute Pipeline"),
+            layout: Some(&compute_pipeline_layout),
+            module: &shader,
+            entry_point: Some("cs_main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
 
         log::info!("test");
 
@@ -355,7 +443,10 @@ impl State {
             config,
             is_surface_configured: false,
             render_pipeline,
-            vertex_buffer,
+            compute_pipeline,
+            compute_bind_group,
+            compute_input_buffer,
+            compute_output_buffer,
             num_vertices,
             start_time,
             time_uniform,
@@ -375,12 +466,25 @@ impl State {
             self.config.height = height;
             self.surface.configure(&self.device, &self.config);
             self.is_surface_configured = true;
-            // self.camera.aspect = width as f32 / height as f32;
+            self.camera.aspect = width as f32 / height as f32;
         }
     }
 
-    fn update(&mut self) {}
+    fn update(&mut self) {
+        self.camera_uniform.update_view_proj(&self.camera);
+        self.queue.write_buffer(
+            &self.camera_buffer,
+            0,
+            bytemuck::cast_slice(&[self.camera_uniform]),
+        );
 
+        self.time_uniform.time = self.start_time.elapsed().as_secs_f32();
+        self.queue.write_buffer(
+            &self.time_buffer,
+            0,
+            bytemuck::cast_slice(&[self.time_uniform]),
+        );
+    }
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         self.window.request_redraw();
 
@@ -388,14 +492,6 @@ impl State {
         if !self.is_surface_configured {
             return Ok(());
         }
-
-        self.time_uniform.time = self.start_time.elapsed().as_secs_f32();
-
-        self.queue.write_buffer(
-            &self.time_buffer,
-            0,
-            bytemuck::cast_slice(&[self.time_uniform]),
-        );
 
         let output = self.surface.get_current_texture()?;
         let view = output
@@ -408,6 +504,19 @@ impl State {
                 label: Some("Render Encoder"),
             });
 
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Compute Pass"),
+                timestamp_writes: None,
+            });
+            compute_pass.set_pipeline(&self.compute_pipeline);
+            compute_pass.set_bind_group(0, &self.time_bind_group, &[]);
+            compute_pass.set_bind_group(1, &self.camera_bind_group, &[]);
+            compute_pass.set_bind_group(2, &self.compute_bind_group, &[]);
+            // We have 3 vertices, and a workgroup size of 256.
+            // One workgroup is enough.
+            compute_pass.dispatch_workgroups(1, 1, 1);
+        }
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
@@ -430,9 +539,9 @@ impl State {
                 timestamp_writes: None,
             });
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            render_pass.set_bind_group(1, &self.time_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.set_bind_group(0, &self.time_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.compute_output_buffer.slice(..));
             render_pass.draw(0..self.num_vertices, 0..1);
         }
 
