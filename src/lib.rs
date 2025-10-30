@@ -21,6 +21,12 @@ pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::from_co
 );
 
 #[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct TimeUniform {
+    time: f32,
+}
+
+#[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
     position: [f32; 3],
@@ -119,6 +125,10 @@ pub struct State {
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    start_time: std::time::Instant,
+    time_uniform: TimeUniform,
+    time_buffer: wgpu::Buffer,
+    time_bind_group: wgpu::BindGroup,
     window: Arc<Window>,
 }
 
@@ -210,10 +220,43 @@ impl State {
         });
         let num_vertices = VERTICES.len() as u32;
 
+        let start_time = std::time::Instant::now();
+        let time_uniform = TimeUniform { time: 0.0 };
+
+        let time_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Time Buffer"),
+            contents: bytemuck::cast_slice(&[time_uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let time_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+                label: Some("time_bind_group_layout"),
+            });
+
+        let time_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &time_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: time_buffer.as_entire_binding(),
+            }],
+            label: Some("time_bind_group"),
+        });
+
         let camera = Camera {
             // position the camera 1 unit up and 2 units back
             // +z is out of the screen
-            eye: (0.0, 1.0, 2.0).into(),
+            eye: (0.0, 1.0, 20.0).into(),
             // have it look at the origin
             target: (0.0, 0.0, 0.0).into(),
             // which way is "up"
@@ -261,7 +304,7 @@ impl State {
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&camera_bind_group_layout],
+                bind_group_layouts: &[&camera_bind_group_layout, &time_bind_group_layout],
                 push_constant_ranges: &[],
             });
 
@@ -314,6 +357,10 @@ impl State {
             render_pipeline,
             vertex_buffer,
             num_vertices,
+            start_time,
+            time_uniform,
+            time_buffer,
+            time_bind_group,
             camera,
             camera_uniform,
             camera_buffer,
@@ -328,6 +375,7 @@ impl State {
             self.config.height = height;
             self.surface.configure(&self.device, &self.config);
             self.is_surface_configured = true;
+            // self.camera.aspect = width as f32 / height as f32;
         }
     }
 
@@ -340,6 +388,14 @@ impl State {
         if !self.is_surface_configured {
             return Ok(());
         }
+
+        self.time_uniform.time = self.start_time.elapsed().as_secs_f32();
+
+        self.queue.write_buffer(
+            &self.time_buffer,
+            0,
+            bytemuck::cast_slice(&[self.time_uniform]),
+        );
 
         let output = self.surface.get_current_texture()?;
         let view = output
@@ -375,6 +431,7 @@ impl State {
             });
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.time_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.draw(0..self.num_vertices, 0..1);
         }

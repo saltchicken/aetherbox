@@ -1,6 +1,6 @@
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 
-PORT = 8001
+PORT = 8002
 
 class WASMRequestHandler(SimpleHTTPRequestHandler):
     def end_headers(self):
