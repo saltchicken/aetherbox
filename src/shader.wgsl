@@ -40,14 +40,35 @@ struct VertexOutput {
 @compute @workgroup_size(256, 1, 1)
 fn cs_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
+    
+    // ‼️ Bounds check is against the INPUT buffer
     if idx >= arrayLength(&compute_input_buffer) {
         return;
     }
-    // ‼️ This copy now works correctly as strides match
-    compute_output_buffer[idx].position = compute_input_buffer[idx].position;
-    compute_output_buffer[idx].color = compute_input_buffer[idx].color;
-}
 
+    // ‼️ Calculate the two output indices
+    let out_idx_a = idx * 2u;
+    let out_idx_b = idx * 2u + 1u;
+
+    // ‼️ Get the original vertex
+    let in_vert = compute_input_buffer[idx];
+
+    // ‼️ --- Write the first vertex (original position) ---
+    compute_output_buffer[out_idx_a].position = in_vert.position;
+    compute_output_buffer[out_idx_a].color = in_vert.color;
+
+    // ‼️ --- Write the second vertex (shifted position) ---
+    // ‼️ Create the new position, shifted 0.2 to the right (positive x)
+    let shifted_pos = vec4<f32>(
+        in_vert.position.x + 0.2,
+        in_vert.position.y,
+        in_vert.position.z,
+        in_vert.position.w
+    );
+
+    compute_output_buffer[out_idx_b].position = shifted_pos;
+    compute_output_buffer[out_idx_b].color = in_vert.color; // ‼️ Use the same color
+}
 @vertex
 fn vs_main(
     model: VertexInput,

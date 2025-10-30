@@ -214,13 +214,15 @@ impl State {
             desired_maximum_frame_latency: 2,
             view_formats: vec![],
         };
-        let num_output_vertices = VERTICES.len() as u32;
+        let num_input_vertices = VERTICES.len() as u32;
 
         let compute_input_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
             contents: bytemuck::cast_slice(VERTICES),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
+
+        let num_output_vertices = num_input_vertices * 2;
 
         let compute_output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Vertex Buffer"),
@@ -232,8 +234,6 @@ impl State {
                 | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
-        let num_vertices = VERTICES.len() as u32;
 
         let start_time = std::time::Instant::now();
         let time_uniform = TimeUniform { time: 0.0 };
@@ -447,7 +447,7 @@ impl State {
             compute_bind_group,
             compute_input_buffer,
             compute_output_buffer,
-            num_vertices,
+            num_vertices: num_output_vertices,
             start_time,
             time_uniform,
             time_buffer,
