@@ -41,36 +41,47 @@ struct VertexOutput {
 fn cs_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
 
-    // ‼️ Bounds check against the OUTPUT buffer
-    if idx >= arrayLength(&compute_output_buffer) {
+    // ‼️ Get the number of input vertices
+    let num_inputs = arrayLength(&compute_input_buffer);
+
+    // ‼️ Bounds check against output AND check if inputs exist
+    if idx >= arrayLength(&compute_output_buffer) || num_inputs == 0u {
         return;
     }
 
-    // ‼️ Read the single origin point
-    let origin_vert = compute_input_buffer[0];
-    
-    // ‼️ Create a new point position using the index
-    // This example creates a spiral
-    let spiral_tightness = 10.0;
-    let radius_growth = 0.000005;
-    
-    // ‼️ Animate the spiral with time
-    let time_factor = sin(u_time.time * 0.5) * 5.0;
+    // ‼️ --- This is the new logic ---
+    // ‼️ Use modulo to find which input vertex to use as the origin
+    let input_idx = idx % num_inputs;
 
-    let angle = (f32(idx) / spiral_tightness) + u_time.time;
-    let radius = f32(idx) * radius_growth * (1.5 + sin(u_time.time));
+    // ‼️ Use integer division to get a "local" index for the spiral
+    // This makes each spiral have its own set of 0, 1, 2, ... indices
+    let local_idx = idx / num_inputs;
+
+    // ‼️ Read the correct origin point
+    let origin_vert = compute_input_buffer[input_idx];
+    
+    // --- Create the spiral using the local_idx ---
+    let spiral_tightness = 10.0;
+    // ‼️ Make radius smaller since we have fewer points per spiral
+    let radius_growth = 0.000015;
+
+    let angle = (f32(local_idx) / spiral_tightness) + u_time.time;
+    let radius = f32(local_idx) * radius_growth * (1.5 + sin(u_time.time));
 
     let new_pos = vec4<f32>(
+        // ‼️ Start from the origin's position
         origin_vert.position.x + cos(angle) * radius,
         origin_vert.position.y + sin(angle) * radius,
-        origin_vert.position.z, // We'll keep Z the same for a 2D spiral
+        origin_vert.position.z,
         origin_vert.position.w
     );
 
     // ‼️ Write the new vertex to the output buffer
     compute_output_buffer[idx].position = new_pos;
+    // ‼️ Use the origin's color (so we get red, green, and blue spirals)
     compute_output_buffer[idx].color = origin_vert.color;
-}@vertex
+}
+@vertex
 fn vs_main(
     model: VertexInput,
 ) -> VertexOutput {

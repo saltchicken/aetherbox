@@ -56,11 +56,20 @@ impl Vertex {
     }
 }
 
-const VERTICES: &[Vertex] = &[Vertex {
-    position: [0.0, 0.0, 0.0, 1.0],
-    color: [1.0, 0.0, 0.0, 1.0],
-}];
-
+const VERTICES: &[Vertex] = &[
+    Vertex {
+        position: [0.0, 0.5, 0.0, 1.0], // ‼️ Top point
+        color: [1.0, 0.0, 0.0, 1.0],    // Red
+    },
+    Vertex {
+        position: [-0.5, -0.5, 0.0, 1.0], // ‼️ Bottom-left
+        color: [0.0, 1.0, 0.0, 1.0],      // Green
+    },
+    Vertex {
+        position: [0.5, -0.5, 0.0, 1.0], // ‼️ Bottom-right
+        color: [0.0, 0.0, 1.0, 1.0],     // Blue
+    },
+];
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct CameraUniform {
