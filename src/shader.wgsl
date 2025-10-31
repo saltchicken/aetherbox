@@ -40,36 +40,37 @@ struct VertexOutput {
 @compute @workgroup_size(256, 1, 1)
 fn cs_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    
-    // ‼️ Bounds check is against the INPUT buffer
-    if idx >= arrayLength(&compute_input_buffer) {
+
+    // ‼️ Bounds check against the OUTPUT buffer
+    if idx >= arrayLength(&compute_output_buffer) {
         return;
     }
 
-    // ‼️ Calculate the two output indices
-    let out_idx_a = idx * 2u;
-    let out_idx_b = idx * 2u + 1u;
+    // ‼️ Read the single origin point
+    let origin_vert = compute_input_buffer[0];
+    
+    // ‼️ Create a new point position using the index
+    // This example creates a spiral
+    let spiral_tightness = 10.0;
+    let radius_growth = 0.000005;
+    
+    // ‼️ Animate the spiral with time
+    let time_factor = sin(u_time.time * 0.5) * 5.0;
 
-    // ‼️ Get the original vertex
-    let in_vert = compute_input_buffer[idx];
+    let angle = (f32(idx) / spiral_tightness) + u_time.time;
+    let radius = f32(idx) * radius_growth * (1.5 + sin(u_time.time));
 
-    // ‼️ --- Write the first vertex (original position) ---
-    compute_output_buffer[out_idx_a].position = in_vert.position;
-    compute_output_buffer[out_idx_a].color = in_vert.color;
-
-    // ‼️ --- Write the second vertex (shifted position) ---
-    // ‼️ Create the new position, shifted 0.2 to the right (positive x)
-    let shifted_pos = vec4<f32>(
-        in_vert.position.x + 0.2,
-        in_vert.position.y,
-        in_vert.position.z,
-        in_vert.position.w
+    let new_pos = vec4<f32>(
+        origin_vert.position.x + cos(angle) * radius,
+        origin_vert.position.y + sin(angle) * radius,
+        origin_vert.position.z, // We'll keep Z the same for a 2D spiral
+        origin_vert.position.w
     );
 
-    compute_output_buffer[out_idx_b].position = shifted_pos;
-    compute_output_buffer[out_idx_b].color = in_vert.color; // ‼️ Use the same color
-}
-@vertex
+    // ‼️ Write the new vertex to the output buffer
+    compute_output_buffer[idx].position = new_pos;
+    compute_output_buffer[idx].color = origin_vert.color;
+}@vertex
 fn vs_main(
     model: VertexInput,
 ) -> VertexOutput {

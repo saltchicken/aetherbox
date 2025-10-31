@@ -12,6 +12,9 @@ use winit::{
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
+const NUM_POINTS: u32 = 100000;
+const WORKGROUP_SIZE: u32 = 256;
+
 #[rustfmt::skip]
 pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::from_cols(
     cgmath::Vector4::new(1.0, 0.0, 0.0, 0.0),
@@ -53,20 +56,10 @@ impl Vertex {
     }
 }
 
-const VERTICES: &[Vertex] = &[
-    Vertex {
-        position: [0.0, 0.0, 0.0, 1.0],
-        color: [1.0, 0.0, 0.0, 1.0],
-    },
-    Vertex {
-        position: [-0.5, -0.5, 0.0, 1.0],
-        color: [0.0, 1.0, 0.0, 1.0],
-    },
-    Vertex {
-        position: [0.5, -0.5, 0.0, 1.0],
-        color: [0.0, 0.0, 1.0, 1.0],
-    },
-];
+const VERTICES: &[Vertex] = &[Vertex {
+    position: [0.0, 0.0, 0.0, 1.0],
+    color: [1.0, 0.0, 0.0, 1.0],
+}];
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -214,7 +207,7 @@ impl State {
             desired_maximum_frame_latency: 2,
             view_formats: vec![],
         };
-        let num_input_vertices = VERTICES.len() as u32;
+        // let num_input_vertices = VERTICES.len() as u32;
 
         let compute_input_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
@@ -222,7 +215,7 @@ impl State {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
-        let num_output_vertices = num_input_vertices * 2;
+        let num_output_vertices = NUM_POINTS;
 
         let compute_output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Vertex Buffer"),
@@ -273,7 +266,7 @@ impl State {
         let camera = Camera {
             // position the camera 1 unit up and 2 units back
             // +z is out of the screen
-            eye: (0.0, 1.0, 2.0).into(),
+            eye: (0.0, 0.0, 2.0).into(),
             // have it look at the origin
             target: (0.0, 0.0, 0.0).into(),
             // which way is "up"
@@ -515,7 +508,8 @@ impl State {
             compute_pass.set_bind_group(2, &self.compute_bind_group, &[]);
             // We have 3 vertices, and a workgroup size of 256.
             // One workgroup is enough.
-            compute_pass.dispatch_workgroups(1, 1, 1);
+            let num_workgroups = (self.num_vertices + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+            compute_pass.dispatch_workgroups(num_workgroups, 1, 1);
         }
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
